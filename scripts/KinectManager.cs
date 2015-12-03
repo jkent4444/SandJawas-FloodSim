@@ -1,5 +1,6 @@
 ﻿using UnityEngine;
 using System.Collections.Generic;
+using System.Collections;
 using Windows.Kinect;
 using UnityEngine.UI;
 using System;
@@ -17,16 +18,26 @@ public class KinectManager : MonoBehaviour {
 	private const int downsample = 4;
 	private const double depthScale = 0.1;
 
-	private ushort[] depthData;
+	private ushort[][] depthData;
+	private ushort[] smoothedData;
 	private ushort[] zS;
+
 
 	public GameObject meshThing;
 
 	private Meshable meshable;
 
+	//default number of frames to smooth
+	public int numFramesToSmooth = 3;
+
+	//initial frame to point at is 0
+	private int framePointer = 0;
+
+
 	// Use this for initialization
 	void Start () {
-	
+		depthData = new ushort[numFramesToSmooth][];
+		//runText ();
 	}
 	
 	// Update is called once per frame
@@ -41,11 +52,23 @@ public class KinectManager : MonoBehaviour {
 				{
 					DepthFrame frame = multiframe.DepthFrameReference.AcquireFrame();
 					if (frame != null) {
-						frame.CopyFrameDataToArray(depthData);
+						if(framePointer >= numFramesToSmooth) {
+							//run the reset and check script here
+
+							framePointer = 0;
+						} else {
+
+							frame.CopyFrameDataToArray(depthData[framePointer]);
+
+							//point to the next frame
+							framePointer++;
+						}
+
+						//save the next three frames
+
 						frame.Dispose();
 						depthProcessed = true;
 
-						Debug.Log (depthData[10000]);
 					}
 				}
 
@@ -54,6 +77,59 @@ public class KinectManager : MonoBehaviour {
 			}
 		}
 
+	}
+
+	/***
+	 * Returns a short array that is smoothed to a certain accuracy. Accuracy is in millimeters.
+	 * Assumes inputs width and height are consistent across data set. 
+	 ***/
+	public ushort[] smoothRawInput(ushort[][] input, int accuracy) {
+		ushort[] temp;
+		ushort shortest;
+		temp = new ushort[input [0].Length];
+
+		//i is ushort co-ordinate
+		for(int i = 0; i < input[0].Length; i++) {
+			//u is frame to check
+			shortest = new ushort();
+			for(int u = 0; u < numFramesToSmooth; u++) {
+				//k is a parrallel frame to compare to
+				for(int k = 0; k < numFramesToSmooth; k++) {
+
+					if(k != u && input[u][i] <= input[k][i]+accuracy && input[u][i] >= input[k][i]-accuracy){
+						//take the shortest of the accurate ones (might not work diserably 
+						if(shortest <= 0 || input[u][i] <= shortest) {
+
+							shortest = input[u][i];
+						}
+						break;
+					}
+				}
+			}
+			Debug.Log(shortest);
+			temp[i] = shortest;
+		}
+		return temp;
+	}
+
+	//just a test to check the smoothing
+	public void runText(){
+		ushort[][] test = new ushort[3][];
+		ushort[] temp = new ushort[50];
+		int accuracy = 7;
+		for (int j = 0; j < 3; j ++) {
+			test[j] = new ushort[50];
+			for (int i = 0; i < 50; i ++) {
+				test[j][i] = (ushort)UnityEngine.Random.Range(0,10);
+			}
+		}
+
+		test [0] [49] = 0;
+		test [1] [49] = 100;
+		temp = smoothRawInput(test, accuracy);
+		//for (int i = 0; i < 50; i ++) {
+		//	Debug.Log(temp[i]);
+		//}
 	}
 
 	public void StartKinect()
@@ -72,8 +148,12 @@ public class KinectManager : MonoBehaviour {
 			reader = sensor.OpenMultiSourceFrameReader(FrameSourceTypes.Depth);
 			DepthWidth = sensor.DepthFrameSource.FrameDescription.Width;
 			DepthHeight = sensor.DepthFrameSource.FrameDescription.Height;
+			for(int i = 0; i < numFramesToSmooth; i++) {
+				depthData[i] = new ushort[DepthWidth * DepthHeight];
+			}
+			smoothedData = new ushort[DepthWidth * DepthHeight];
 
-			depthData = new ushort[DepthWidth * DepthHeight];
+
 
 			if (!sensor.IsOpen){
 				sensor.Open();
@@ -119,12 +199,12 @@ public class KinectManager : MonoBehaviour {
 			for (int x1 = x; x1 < x + 4; x1++) {
 				int fullIndex = (y1 * DepthWidth) + x1;
 
-				if (depthData[fullIndex] == 0 || depthData[fullIndex] > 4500)
+				if (smoothedData[fullIndex] == 0 || smoothedData[fullIndex] > 4500)
 				{
 					sum += 4500;
 					ignore++;
 				} else {
-					sum += depthData[fullIndex];
+					sum += smoothedData[fullIndex];
 				}
 			}
 		}
