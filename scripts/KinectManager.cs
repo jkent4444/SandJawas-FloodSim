@@ -15,123 +15,76 @@ public class KinectManager : MonoBehaviour {
 	public int DepthHeight { get; private set; }
 	public int DepthWidth { get; private set; }
 
+    //the amount the mesh is being reduced
 	private const int downsample = 4;
 	private const double depthScale = 0.1;
 
-	private ushort[][] depthData;
-	private ushort[] smoothedData;
+	private ushort[] depthData;
+    private CircularData circularDataStorage;
+    public bool firstLoad;
+	private ushort[] rawFrameData;
 	private ushort[] zS;
+    private ushort[] topoGraphyMap;
 
+    private MapFileManager MapFileManager;
 
+    public Vector2 cullCenter;
 	public GameObject meshThing;
 
 	private Meshable meshable;
 
 	//default number of frames to smooth
-	public int numFramesToSmooth = 3;
+	public int numFramesToSmooth;
 
 	//initial frame to point at is 0
-	private int framePointer = 0;
+	private int frameCounter = 0;
 
+    //smoothing the frames in millimeters
+    public int accuracy;
+
+    //if cull depth is reached this will be the default value
+    public uint cullDefaultHeight = 1200;
+
+    //the max amount of depth before being culled
+    public float cullDistance = 200;
 
 	// Use this for initialization
 	void Start () {
-		depthData = new ushort[numFramesToSmooth][];
+        MapFileManager = this.GetComponent<MapFileManager>();
+        firstLoad = true;
+        
 		//runText ();
 	}
 	
 	// Update is called once per frame
 	void Update () {
 		if (Initalised) {
-			bool depthProcessed = false;
-
 			if (reader != null)
 			{
 				MultiSourceFrame multiframe = reader.AcquireLatestFrame();
+
 				if (multiframe != null)
 				{
 					DepthFrame frame = multiframe.DepthFrameReference.AcquireFrame();
-					if (frame != null) {
-						if(framePointer >= numFramesToSmooth) {
-							//run the reset and check script here
 
-							framePointer = 0;
-						} else {
-
-							frame.CopyFrameDataToArray(depthData[framePointer]);
-
-							//point to the next frame
-							framePointer++;
-						}
-
-						//save the next three frames
-
-						frame.Dispose();
-						depthProcessed = true;
-
+					if (frame != null) 
+                    {
+                            frame.CopyFrameDataToArray(rawFrameData);
+						    frame.Dispose();
 					}
 				}
 
 				multiframe = null;
+                
 				remesh();
 			}
 		}
 
 	}
-
-	/***
-	 * Returns a short array that is smoothed to a certain accuracy. Accuracy is in millimeters.
-	 * Assumes inputs width and height are consistent across data set. 
-	 ***/
-	public ushort[] smoothRawInput(ushort[][] input, int accuracy) {
-		ushort[] temp;
-		ushort shortest;
-		temp = new ushort[input [0].Length];
-
-		//i is ushort co-ordinate
-		for(int i = 0; i < input[0].Length; i++) {
-			//u is frame to check
-			shortest = new ushort();
-			for(int u = 0; u < numFramesToSmooth; u++) {
-				//k is a parrallel frame to compare to
-				for(int k = 0; k < numFramesToSmooth; k++) {
-
-					if(k != u && input[u][i] <= input[k][i]+accuracy && input[u][i] >= input[k][i]-accuracy){
-						//take the shortest of the accurate ones (might not work diserably 
-						if(shortest <= 0 || input[u][i] <= shortest) {
-
-							shortest = input[u][i];
-						}
-						break;
-					}
-				}
-			}
-			Debug.Log(shortest);
-			temp[i] = shortest;
-		}
-		return temp;
-	}
-
-	//just a test to check the smoothing
-	public void runText(){
-		ushort[][] test = new ushort[3][];
-		ushort[] temp = new ushort[50];
-		int accuracy = 7;
-		for (int j = 0; j < 3; j ++) {
-			test[j] = new ushort[50];
-			for (int i = 0; i < 50; i ++) {
-				test[j][i] = (ushort)UnityEngine.Random.Range(0,10);
-			}
-		}
-
-		test [0] [49] = 0;
-		test [1] [49] = 100;
-		temp = smoothRawInput(test, accuracy);
-		//for (int i = 0; i < 50; i ++) {
-		//	Debug.Log(temp[i]);
-		//}
-	}
-
+    public int getDownSample()
+    {
+        return downsample;
+    }
 	public void StartKinect()
 	{
 		if (Initalised == false) {
@@ -145,14 +98,14 @@ public class KinectManager : MonoBehaviour {
 				return;
 			}
 
+
 			reader = sensor.OpenMultiSourceFrameReader(FrameSourceTypes.Depth);
 			DepthWidth = sensor.DepthFrameSource.FrameDescription.Width;
 			DepthHeight = sensor.DepthFrameSource.FrameDescription.Height;
-			for(int i = 0; i < numFramesToSmooth; i++) {
-				depthData[i] = new ushort[DepthWidth * DepthHeight];
-			}
-			smoothedData = new ushort[DepthWidth * DepthHeight];
-
+            cullCenter = new Vector2(DepthWidth, 300);
+            depthData = new ushort[DepthWidth * DepthHeight];
+            rawFrameData = new ushort[DepthWidth * DepthHeight];
+            circularDataStorage = new CircularData(numFramesToSmooth, (DepthHeight / downsample) * (DepthWidth / downsample));
 
 
 			if (!sensor.IsOpen){
@@ -160,7 +113,7 @@ public class KinectManager : MonoBehaviour {
 			}
 
 			zS = new ushort[(DepthHeight / downsample) * (DepthWidth / downsample)];
-
+            Debug.Log(DepthWidth / downsample + ":" + DepthHeight / downsample);
 			meshable = meshThing.GetComponent<Meshable>();
 			meshable.CreateMesh(DepthWidth/downsample, DepthHeight/downsample);
 		}
@@ -168,26 +121,83 @@ public class KinectManager : MonoBehaviour {
 
 	private void remesh()
 	{
+        uint sum = 0;
+        ushort[] temp = new ushort[(DepthHeight / downsample) * (DepthWidth / downsample)];
 		for (int y = 0; y < DepthHeight; y+= downsample) {
 			for (int x = 0; x < DepthWidth; x+= downsample) {
 				int indexX = x/downsample;
 				int indexY = y/downsample;
 				int smallIndex = (indexY * (DepthWidth / downsample)) + indexX;
+                ushort avg = new ushort();
 
-				ushort avg = averageDepth(x,y);
+                if (checkWithinCull(x,y))
+                {
+                   avg = averageDepth(x, y);
+                    
+                }
+                else
+                {
+                   avg = Convert.ToUInt16(cullDefaultHeight);
 
-				zS[smallIndex] = avg;
+                }
+                zS[smallIndex] = avg;
 			}
 		}
 
-		/*for (int y = 1; y < DepthHeight / downsample -1; y++) {
-			for (int x = 1; x < DepthWidth / downsample - 1; x++) {
 
-			}
-		}*/
+        circularDataStorage.addData(zS);
+        ushort[] v = circularDataStorage.averageData;
+        meshable.setZs(ref v);
+       /** if (firstLoad)
+        {
+            //save the frame to depth data
+            ushort[] copy = new ushort[zS.Length];
+            Array.Copy(v, copy, v.Length);
+            depthData = v;
+            firstLoad = false;
+        }
+        else
+        {
+            for (int y = 0; y < DepthHeight / downsample ; y++) {
+			    for (int x = 0; x < DepthWidth / downsample; x++) {
+                    int index = (y * (DepthWidth / downsample)) + x;
+                    if (v[index] == 4500)
+                    {
+                        continue;
+                    }
+                    if (Mathf.Abs(depthData[index] - v[index]) > accuracy)
+                    {
 
-		meshable.setZs (ref zS);
+                        depthData[index] = v[index];
+            
+                    }
+			    }
+		    }
+            meshable.setZs(ref depthData);
+        }**/
+
+		
 	}
+
+    //checks whether the point is within the cull point
+    private bool checkWithinCull(int x, int y)
+    {
+
+        int centerX = (int)cullCenter.x / 2;
+        int centerY =  (int)cullCenter.y/ 2;
+        int newX = x - centerX;
+        int neyY = y - centerY;
+
+
+        if (Mathf.Sqrt(newX * newX + neyY * neyY) <= cullDistance)
+        {
+            return true;
+        }
+        else
+        {
+            return false;
+        }
+    }
 
 	private ushort averageDepth(int x, int y)
 	{
@@ -195,27 +205,80 @@ public class KinectManager : MonoBehaviour {
 
 		uint ignore = 0;
 
-		for (int y1 = y; y1 < y + 4; y1++) {
-			for (int x1 = x; x1 < x + 4; x1++) {
+        int downSquared = downsample * downsample;
+
+		for (int y1 = y; y1 < y + downsample; y1++) {
+			for (int x1 = x; x1 < x + downsample; x1++) {
 				int fullIndex = (y1 * DepthWidth) + x1;
 
-				if (smoothedData[fullIndex] == 0 || smoothedData[fullIndex] > 4500)
+                if (rawFrameData[fullIndex] == 0 || rawFrameData[fullIndex] > 4500)
 				{
-					sum += 4500;
+                    sum += 4500;
 					ignore++;
 				} else {
-					sum += smoothedData[fullIndex];
+                    sum += rawFrameData[fullIndex];
 				}
 			}
 		}
 
-		if (ignore > 0 && ignore != 16) {
-			sum = sum - (ignore * 4500);
-			return Convert.ToUInt16 (sum / (16 - ignore));
-		} else if (ignore == 16) {
-			return 4500;
+        if (ignore > 0 && ignore != downSquared)
+        {
+            sum = sum - (ignore * 4500);
+            return Convert.ToUInt16(sum / (downSquared - ignore));
+        }
+        else if (ignore == downSquared)
+        {
+            return Convert.ToUInt16(4500);
 		} else {
-			return Convert.ToUInt16(sum /16);
+            return Convert.ToUInt16(sum / downSquared);
 		}
+	}
+
+    public void takeMeshSnapShot()
+    {
+        for (int y = 0; y < DepthHeight/downsample; y++)
+        {
+            for (int x = 0; x < DepthWidth / downsample; x++)
+            {
+                int index = (y * (DepthWidth / downsample)) + x;
+                MapFileManager.addStringToSave(zS[index].ToString());            
+            }           
+        }
+        MapFileManager.saveString();
+    }
+
+    public void LoadMeshSnapShot()
+    {
+        ushort[] temp = MapFileManager.loadFile();
+        meshable = meshThing.GetComponent<Meshable>();
+		DepthWidth = 128;
+		DepthHeight = 106;
+        meshable.CreateMesh(128, 106);
+        zS = temp;
+        meshable.setZs(ref temp);
+    }
+
+    public void GenerateTopoGraphyMap()
+    {
+        ushort[] temp = zS;
+        for (int y = 0; y < 128; y++)
+        {
+            for (int x = 0; x < 106; x++)
+            {
+                int index = (y * (106)) + x;
+              
+                temp[index] = Convert.ToUInt16(zS[index] - (zS[index] % 20));
+               
+                
+            }
+        }
+        meshable = meshThing.GetComponent<Meshable>();
+        meshable.CreateMesh(128, 106);
+        meshable.setZs(ref temp);
+    }
+
+	public void initFloodSimulation(){
+		this.GetComponent<WaterController> ().initWaterSim (ref zS);
+        //this.GetComponent<CameraController>().setInGame(true);
 	}
 }

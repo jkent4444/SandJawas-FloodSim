@@ -11,12 +11,15 @@ public class Meshable : MonoBehaviour {
 
 	// Use this for initialization
 	void Start () {
-	
+       
 	}
 	
 	// Update is called once per frame
 	void Update () {
-	
+	    
+	}
+	public Vector3[] getVerts() {
+		return vertices;
 	}
 
 	public void CreateMesh(int width, int height)
@@ -57,19 +60,31 @@ public class Meshable : MonoBehaviour {
 		mesh.uv = uvs;
 		mesh.triangles = triangles;
 		mesh.RecalculateNormals ();
-		transform.position = new Vector3 (-width / 2, height / 2, 0);
+		//transform.position = new Vector3 (-width / 2, height / 2, 0);
 	}
 
 	public void setZs(ref ushort[] zS)
 	{
 		for (int i = 0; i < vertices.Length; i++) {
-			vertices[i].z = Convert.ToSingle (zS[i]) * 0.1f;
-
+			vertices[i].z = (Convert.ToSingle (zS[i] - 1200) * 0.1f) ;
+        
 		}
 		mesh.vertices = vertices;
 		mesh.uv = uvs;
 		mesh.triangles = triangles;
 		mesh.RecalculateNormals ();
 
+	}
+	public void setWaterZs(ref ushort[] zS)
+	{
+		for (int i = 0; i < vertices.Length; i++) {
+			vertices[i].z = (Convert.ToSingle (500-zS[i]) * 0.1f) ;
+			
+		}
+		mesh.vertices = vertices;
+		mesh.uv = uvs;
+		mesh.triangles = triangles;
+		mesh.RecalculateNormals ();
+		
 	}
 }
